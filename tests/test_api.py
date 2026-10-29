@@ -36,3 +36,22 @@ def test_question_validation(client):
 def test_telemetry_validation_rejects_impossible_values(client):
     response = client.post('/api/telemetry', json={'vehicle_id': 'test-car', 'event_type': 'test', 'speed_kph': 900})
     assert response.status_code == 422
+
+
+def test_assistant_and_speech_assets(client):
+    llm_res = client.get('/llm')
+    assert llm_res.status_code == 200
+    assert 'data-page="llm"' in llm_res.text
+
+    js_res = client.get('/static/app.js')
+    assert js_res.status_code == 200
+    assert 'initVoiceAssistant' in js_res.text
+    assert 'voiceToggle' in js_res.text
+    assert 'voicePlayBtn' in js_res.text
+    assert 'micButton' in js_res.text
+
+    css_res = client.get('/static/styles.css')
+    assert css_res.status_code == 200
+    assert '.voice-toolbar' in css_res.text
+    assert '.mic-button' in css_res.text
+

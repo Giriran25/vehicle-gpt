@@ -336,12 +336,470 @@
     function drawChart(id, rows, field, unit, color) { const el = $(`#${id}`), pointsData = rows.filter(row => row[field] != null); if (pointsData.length < 2) { el.innerHTML = '<div class="empty-state">Not enough recorded values to draw this chart.</div>'; return; } const values = pointsData.map(r => r[field]), min = Math.min(...values), max = Math.max(...values), range = max - min || 1, points = values.map((v,i) => `${(i/(values.length-1))*100},${94-((v-min)/range)*76}`).join(' '), dots = pointsData.map((row,i) => `<circle class="chart-point" cx="${(i/(values.length-1))*100}" cy="${94-((row[field]-min)/range)*76}" r="2" data-tip="${esc(`${fmt(row[field])} ${unit} · ${dateFmt(row.recorded_at)}`)}"></circle>`).join(''); el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${field} chart"><polyline class="chart-line" points="${points}" fill="none" stroke="${color}" stroke-width="1.4" vector-effect="non-scaling-stroke"/><polygon class="chart-area" points="${points} 100,100 0,100" fill="${color}" opacity=".08"/>${dots}</svg><div class="chart-tooltip" aria-live="polite"></div><div class="chart-labels"><span>${fmt(min)} ${unit}</span><span>${fmt(max)} ${unit}</span></div>`; el.querySelectorAll('.chart-point').forEach(point => point.addEventListener('pointerenter', () => { const tooltip = $('.chart-tooltip', el); tooltip.textContent = point.dataset.tip; tooltip.classList.add('visible'); })); el.addEventListener('pointerleave', () => $('.chart-tooltip', el)?.classList.remove('visible')); }
     $('#applyFilters').addEventListener('click', () => { currentPage = 1; load(); }); $('#resetFilters').addEventListener('click', () => { $('#startFilter').value = ''; $('#endFilter').value = ''; currentPage = 1; load(); }); $('#prevPage').addEventListener('click', () => { if (currentPage > 1) { currentPage--; load(); } }); $('#nextPage').addEventListener('click', () => { if (allRows.length === 10) { currentPage++; load(); } }); load();
   }
+  function initVoiceAssistant(messagesContainer) {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    const isSpeechSupported = !!(synth && typeof SpeechSynthesisUtterance !== 'undefined');
+    const SpeechRec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+    const isRecSupported = !!SpeechRec;
+
+    const toggleBtn = $('#voiceToggle');
+    const liveBadge = $('#voiceIndicator');
+    const statusText = $('#voiceStatusText');
+    const playBtn = $('#voicePlayBtn');
+    const pauseBtn = $('#voicePauseBtn');
+    const resumeBtn = $('#voiceResumeBtn');
+    const stopBtn = $('#voiceStopBtn');
+    const replayBtn = $('#voiceReplayBtn');
+    const voiceSelect = $('#voiceSelect');
+    const rateSelect = $('#rateSelect');
+    const micBtn = $('#micButton');
+    const micBanner = $('#micListeningBanner');
+    const micCancelBtn = $('#micCancelBtn');
+    const chatInput = $('#chatInput');
+
+    let voiceEnabled = true;
+    try {
+      const saved = localStorage.getItem('vehiclegpt_voice_enabled');
+      if (saved !== null) voiceEnabled = saved === '1';
+    } catch (_) {}
+
+    let savedVoiceURI = '';
+    try { savedVoiceURI = localStorage.getItem('vehiclegpt_voice_uri') || ''; } catch (_) {}
+
+    let savedRate = '1.0';
+    try {
+      savedRate = localStorage.getItem('vehiclegpt_voice_rate') || '1.0';
+      if (rateSelect) rateSelect.value = savedRate;
+    } catch (_) {}
+
+    let speaking = false;
+    let paused = false;
+    let listening = false;
+    let latestAnswerText = '';
+    let voices = [];
+    let recognition = null;
+    let keepAliveTimer = null;
+
+    const initialWelcome = messagesContainer ? messagesContainer.querySelector('.message.assistant p') : null;
+    if (initialWelcome) {
+      latestAnswerText = initialWelcome.textContent.trim();
+    }
+
+    function updateToggleUI() {
+      if (!toggleBtn) return;
+      toggleBtn.classList.toggle('active', voiceEnabled);
+      toggleBtn.setAttribute('aria-pressed', voiceEnabled ? 'true' : 'false');
+      const label = toggleBtn.querySelector('.voice-toggle-label');
+      if (label) {
+        label.innerHTML = `VOICE NARRATION: <b>${voiceEnabled ? 'ACTIVE' : 'MUTED'}</b>`;
+      }
+    }
+
+    function setPlaybackState(state) {
+      if (!liveBadge || !statusText) return;
+      liveBadge.className = `voice-live-badge ${state}`;
+      if (state === 'speaking') {
+        speaking = true; paused = false;
+        statusText.textContent = 'SPEAKING';
+        if (playBtn) playBtn.disabled = true;
+        if (pauseBtn) { pauseBtn.disabled = false; pauseBtn.style.display = ''; }
+        if (resumeBtn) resumeBtn.style.display = 'none';
+        if (stopBtn) stopBtn.disabled = false;
+        if (replayBtn) replayBtn.disabled = false;
+      } else if (state === 'paused') {
+        speaking = true; paused = true;
+        statusText.textContent = 'PAUSED';
+        if (playBtn) playBtn.disabled = true;
+        if (pauseBtn) pauseBtn.style.display = 'none';
+        if (resumeBtn) { resumeBtn.disabled = false; resumeBtn.style.display = ''; }
+        if (stopBtn) stopBtn.disabled = false;
+        if (replayBtn) replayBtn.disabled = false;
+      } else if (state === 'listening') {
+        statusText.textContent = 'LISTENING';
+        if (playBtn) playBtn.disabled = true;
+        if (pauseBtn) pauseBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = true;
+      } else {
+        speaking = false; paused = false;
+        statusText.textContent = 'IDLE';
+        if (playBtn) playBtn.disabled = !latestAnswerText;
+        if (pauseBtn) { pauseBtn.disabled = true; pauseBtn.style.display = ''; }
+        if (resumeBtn) resumeBtn.style.display = 'none';
+        if (stopBtn) stopBtn.disabled = true;
+        if (replayBtn) replayBtn.disabled = !latestAnswerText;
+      }
+    }
+
+    function cleanTextForSpeech(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.innerHTML = text;
+      let clean = div.textContent || div.innerText || '';
+      return clean
+        .replace(/°C/g, ' degrees Celsius')
+        .replace(/km\/h/g, ' kilometers per hour')
+        .replace(/%/g, ' percent')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function loadVoices() {
+      if (!isSpeechSupported || !synth) return;
+      try {
+        voices = synth.getVoices() || [];
+      } catch (_) {
+        voices = [];
+      }
+      if (!voiceSelect || !voices.length) return;
+
+      const currentVal = voiceSelect.value || savedVoiceURI;
+      voiceSelect.innerHTML = '<option value="">Default System Voice</option>';
+      voices.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.voiceURI;
+        opt.textContent = `${v.name} (${v.lang})${v.default ? ' — Default' : ''}`;
+        if (currentVal && v.voiceURI === currentVal) {
+          opt.selected = true;
+        }
+        voiceSelect.appendChild(opt);
+      });
+    }
+
+    function stopSpeech() {
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+      if (isSpeechSupported && synth) {
+        try { synth.cancel(); } catch (_) {}
+      }
+      setPlaybackState('idle');
+    }
+
+    function speakText(rawText, isAuto = false) {
+      if (!isSpeechSupported || !synth) return;
+      if (isAuto && !voiceEnabled) return;
+
+      const speechText = cleanTextForSpeech(rawText);
+      if (!speechText) return;
+
+      latestAnswerText = rawText;
+      stopSpeech();
+
+      let utterance;
+      try {
+        utterance = new SpeechSynthesisUtterance(speechText);
+      } catch (e) {
+        return;
+      }
+
+      const selectedURI = voiceSelect ? voiceSelect.value : '';
+      if (selectedURI) {
+        const matched = voices.find(v => v.voiceURI === selectedURI);
+        if (matched) utterance.voice = matched;
+      }
+
+      const currentRate = rateSelect ? parseFloat(rateSelect.value) || 1.0 : 1.0;
+      utterance.rate = currentRate;
+      utterance.pitch = 1.0;
+
+      utterance.onstart = () => {
+        setPlaybackState('speaking');
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
+        keepAliveTimer = setInterval(() => {
+          if (!synth || !synth.speaking) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
+            return;
+          }
+          if (!synth.paused) {
+            synth.pause();
+            synth.resume();
+          }
+        }, 10000);
+      };
+
+      utterance.onpause = () => {
+        setPlaybackState('paused');
+      };
+
+      utterance.onresume = () => {
+        setPlaybackState('speaking');
+      };
+
+      utterance.onend = () => {
+        if (keepAliveTimer) {
+          clearInterval(keepAliveTimer);
+          keepAliveTimer = null;
+        }
+        setPlaybackState('idle');
+      };
+
+      utterance.onerror = (e) => {
+        if (keepAliveTimer) {
+          clearInterval(keepAliveTimer);
+          keepAliveTimer = null;
+        }
+        if (e.error !== 'canceled' && e.error !== 'interrupted') {
+          if (typeof console !== 'undefined') console.warn('Speech synthesis error:', e.error);
+        }
+        setPlaybackState('idle');
+      };
+
+      try {
+        synth.speak(utterance);
+      } catch (err) {
+        if (typeof console !== 'undefined') console.warn('speak failed:', err);
+        setPlaybackState('idle');
+      }
+    }
+
+    function pauseSpeech() {
+      if (isSpeechSupported && synth && synth.speaking && !synth.paused) {
+        try { synth.pause(); } catch (_) {}
+        setPlaybackState('paused');
+      }
+    }
+
+    function resumeSpeech() {
+      if (isSpeechSupported && synth && synth.paused) {
+        try { synth.resume(); } catch (_) {}
+        setPlaybackState('speaking');
+      } else if (latestAnswerText) {
+        speakText(latestAnswerText);
+      }
+    }
+
+    function toggleVoice() {
+      voiceEnabled = !voiceEnabled;
+      try {
+        localStorage.setItem('vehiclegpt_voice_enabled', voiceEnabled ? '1' : '0');
+      } catch (_) {}
+      updateToggleUI();
+      if (!voiceEnabled && speaking) {
+        stopSpeech();
+      }
+      toast(voiceEnabled ? 'Voice narration enabled' : 'Voice narration muted');
+    }
+
+    function stopListening() {
+      if (recognition) {
+        try { recognition.stop(); } catch (_) {}
+      }
+      listening = false;
+      if (micBtn) micBtn.classList.remove('listening');
+      if (micBanner) micBanner.classList.add('hidden');
+      if (!speaking) setPlaybackState('idle');
+    }
+
+    function startListening() {
+      if (!isRecSupported) {
+        toast('Voice input is not supported in this browser.');
+        return;
+      }
+      if (listening) {
+        stopListening();
+        return;
+      }
+
+      stopSpeech();
+
+      try {
+        recognition = new SpeechRec();
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.lang = (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en-US';
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          listening = true;
+          if (micBtn) micBtn.classList.add('listening');
+          if (micBanner) micBanner.classList.remove('hidden');
+          setPlaybackState('listening');
+        };
+
+        recognition.onresult = (event) => {
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          if (chatInput && transcript) {
+            chatInput.value = transcript;
+          }
+        };
+
+        recognition.onerror = (event) => {
+          const err = event.error;
+          if (err === 'not-allowed') {
+            toast('Microphone permission was denied. Allow microphone access in your browser.');
+          } else if (err === 'no-speech') {
+            toast('No speech detected. Please try again.');
+          } else if (err === 'audio-capture') {
+            toast('No microphone found on this device.');
+          } else if (err !== 'aborted') {
+            toast(`Voice input error: ${err}`);
+          }
+          stopListening();
+        };
+
+        recognition.onend = () => {
+          stopListening();
+          if (chatInput) chatInput.focus();
+        };
+
+        recognition.start();
+      } catch (err) {
+        toast(`Could not start speech recognition: ${err.message || err}`);
+        stopListening();
+      }
+    }
+
+    if (toggleBtn) toggleBtn.addEventListener('click', toggleVoice);
+    if (playBtn) playBtn.addEventListener('click', () => {
+      if (paused) resumeSpeech();
+      else if (latestAnswerText) speakText(latestAnswerText);
+    });
+    if (pauseBtn) pauseBtn.addEventListener('click', pauseSpeech);
+    if (resumeBtn) resumeBtn.addEventListener('click', resumeSpeech);
+    if (stopBtn) stopBtn.addEventListener('click', stopSpeech);
+    if (replayBtn) replayBtn.addEventListener('click', () => {
+      if (latestAnswerText) speakText(latestAnswerText);
+    });
+
+    if (rateSelect) rateSelect.addEventListener('change', () => {
+      try { localStorage.setItem('vehiclegpt_voice_rate', rateSelect.value); } catch (_) {}
+    });
+
+    if (voiceSelect) voiceSelect.addEventListener('change', () => {
+      try { localStorage.setItem('vehiclegpt_voice_uri', voiceSelect.value); } catch (_) {}
+    });
+
+    if (micBtn) {
+      if (!isRecSupported) {
+        micBtn.title = 'Voice recognition not supported in this browser';
+        micBtn.classList.add('disabled');
+      }
+      micBtn.addEventListener('click', startListening);
+    }
+
+    if (micCancelBtn) {
+      micCancelBtn.addEventListener('click', stopListening);
+    }
+
+    if (isSpeechSupported && synth) {
+      loadVoices();
+      if (synth.onvoiceschanged !== undefined) {
+        synth.onvoiceschanged = loadVoices;
+      }
+      setTimeout(loadVoices, 300);
+      setTimeout(loadVoices, 1000);
+    } else {
+      if (statusText) statusText.textContent = 'NO TTS';
+      if (toggleBtn) toggleBtn.disabled = true;
+      if (playBtn) playBtn.disabled = true;
+      if (replayBtn) replayBtn.disabled = true;
+    }
+
+    updateToggleUI();
+    setPlaybackState('idle');
+
+    const cleanup = () => {
+      stopSpeech();
+      stopListening();
+    };
+    window.addEventListener('pagehide', cleanup, {once: true});
+    window.addEventListener('beforeunload', cleanup, {once: true});
+
+    return {
+      onAnswerReceived: (answerText) => {
+        latestAnswerText = answerText;
+        if (playBtn) playBtn.disabled = false;
+        if (replayBtn) replayBtn.disabled = false;
+        if (voiceEnabled) {
+          speakText(answerText, true);
+        }
+      },
+      speakSpecific: (text) => {
+        speakText(text, false);
+      },
+      setLatestAnswer: (text) => {
+        latestAnswerText = text;
+        if (playBtn) playBtn.disabled = !text;
+        if (replayBtn) replayBtn.disabled = !text;
+      },
+      stop: stopSpeech
+    };
+  }
   function llmPage() {
-    shell(`<section class="page-intro assistant-intro reveal"><div><div class="eyebrow">VEHICLEGPT INTELLIGENCE / 03</div><h1>Ask your <em>vehicle.</em></h1><p>Explore recorded history through evidence-grounded questions. The current answering mode is deterministic and rule-based — no model is being presented as active.</p></div><div class="mode-badge"><span>●</span><b>Evidence mode</b><small>Rule-based prototype</small></div></section><section class="assistant-layout reveal"><article class="panel chat-panel"><div class="chat-head"><div class="robot-mini">✦</div><div><b>VehicleGPT co-pilot</b><small>Grounded in demo-vehicle-01 telemetry</small></div><button id="clearChat" class="text-link">Clear</button></div><div id="chatMessages" class="chat-messages"><div class="message assistant"><span class="message-label">CO-PILOT · READY</span><p>Ask me about engine temperature, fuel changes, speed, or distance. I will show the evidence I used and say when the records are insufficient.</p></div></div><div class="suggestion-row"><button data-question="Has my engine temperature been unusually high?">Temperature history</button><button data-question="How has my fuel level changed?">Fuel changes</button><button data-question="What is my maximum recorded speed?">Maximum speed</button></div><form id="chatForm" class="chat-form"><label class="sr-only" for="chatInput">Ask VehicleGPT</label><textarea id="chatInput" rows="1" maxlength="500" placeholder="Ask about your recorded telemetry…" required></textarea><button id="sendButton" class="button primary" type="submit">Send ↗</button></form></article><aside class="panel evidence-guide"><div class="eyebrow">HOW TO ASK</div><h2>Good questions get grounded answers.</h2><div class="guide-item"><span>01</span><p>Choose a supported topic: temperature, fuel, speed, or odometer distance.</p></div><div class="guide-item"><span>02</span><p>Every response can include measurements from the stored telemetry.</p></div><div class="guide-item"><span>03</span><p>No evidence means no guess. The assistant will abstain honestly.</p></div><a class="text-link" href="/analytics">Inspect the source data ↗</a></aside></section>`);
+    shell(`<section class="page-intro assistant-intro reveal"><div><div class="eyebrow">VEHICLEGPT INTELLIGENCE / 03</div><h1>Ask your <em>vehicle.</em></h1><p>Explore recorded history through evidence-grounded questions. Telemetry answers can be read aloud using browser voice narration or entered with voice input.</p></div><div class="mode-badge"><span>●</span><b>Evidence mode</b><small>Web speech enabled</small></div></section><section class="assistant-layout reveal"><article class="panel chat-panel"><div class="chat-head"><div class="robot-mini">✦</div><div><b>VehicleGPT co-pilot</b><small>Grounded in demo-vehicle-01 telemetry</small></div><button id="clearChat" class="text-link">Clear</button></div><div class="voice-toolbar" role="region" aria-label="Voice audio controls"><div class="voice-status-group"><button id="voiceToggle" class="voice-toggle-btn active" type="button" aria-pressed="true" title="Toggle automatic speech narration"><span class="voice-toggle-led"></span><span class="voice-toggle-label">VOICE NARRATION: <b>ACTIVE</b></span></button><div id="voiceIndicator" class="voice-live-badge idle" aria-live="polite"><span class="audio-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span id="voiceStatusText" class="voice-status-text">IDLE</span></div></div><div class="voice-actions-group"><button id="voicePlayBtn" class="voice-btn" type="button" title="Play latest answer" aria-label="Play latest answer"><span aria-hidden="true">▶</span> Play</button><button id="voicePauseBtn" class="voice-btn" type="button" title="Pause narration" aria-label="Pause narration" disabled><span aria-hidden="true">⏸</span> Pause</button><button id="voiceResumeBtn" class="voice-btn" type="button" title="Resume narration" aria-label="Resume narration" style="display:none"><span aria-hidden="true">⏯</span> Resume</button><button id="voiceStopBtn" class="voice-btn" type="button" title="Stop narration" aria-label="Stop narration" disabled><span aria-hidden="true">⏹</span> Stop</button><button id="voiceReplayBtn" class="voice-btn" type="button" title="Replay latest answer" aria-label="Replay latest answer"><span aria-hidden="true">↺</span> Replay</button></div><div class="voice-settings-group"><label class="voice-select-label" for="voiceSelect"><span>VOICE</span><select id="voiceSelect" aria-label="Select speech synthesis voice"><option value="">Default System Voice</option></select></label><label class="voice-rate-label" for="rateSelect"><span>SPEED</span><select id="rateSelect" aria-label="Select speech rate"><option value="0.8">0.8x</option><option value="1.0" selected>1.0x</option><option value="1.2">1.2x</option><option value="1.5">1.5x</option></select></label></div></div><div id="chatMessages" class="chat-messages"><div class="message assistant"><span class="message-label">CO-PILOT · READY</span><button class="message-speak-btn" type="button" title="Read this answer aloud" aria-label="Read this answer aloud"><span>🔊 Listen</span></button><p>Ask me about engine temperature, fuel changes, speed, or distance. I will show the evidence I used and say when the records are insufficient.</p></div></div><div class="suggestion-row"><button data-question="Has my engine temperature been unusually high?">Temperature history</button><button data-question="How has my fuel level changed?">Fuel changes</button><button data-question="What is my maximum recorded speed?">Maximum speed</button></div><form id="chatForm" class="chat-form"><label class="sr-only" for="chatInput">Ask VehicleGPT</label><div class="chat-input-wrapper"><textarea id="chatInput" rows="1" maxlength="500" placeholder="Ask about your recorded telemetry…" required></textarea><button id="micButton" class="mic-button" type="button" aria-label="Speak your question using microphone" title="Speak question"><svg class="mic-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path fill="currentColor" d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg><span class="mic-pulse" aria-hidden="true"></span></button></div><button id="sendButton" class="button primary" type="submit">Send ↗</button></form><div id="micListeningBanner" class="mic-banner hidden" role="status" aria-live="polite"><span class="mic-live-dot"></span><span>LISTENING: Speak your question now...</span><button id="micCancelBtn" type="button" class="mic-cancel-btn">Cancel ✕</button></div></article><aside class="panel evidence-guide"><div class="eyebrow">HOW TO ASK</div><h2>Good questions get grounded answers.</h2><div class="guide-item"><span>01</span><p>Choose a supported topic: temperature, fuel, speed, or odometer distance.</p></div><div class="guide-item"><span>02</span><p>Every response can include measurements from the stored telemetry.</p></div><div class="guide-item"><span>03</span><p>No evidence means no guess. The assistant will abstain honestly.</p></div><div class="guide-item"><span>04</span><p>Use voice controls to listen to answers or speak questions via microphone.</p></div><a class="text-link" href="/analytics">Inspect the source data ↗</a></aside></section>`);
     const messages = $('#chatMessages'), input = $('#chatInput'), send = $('#sendButton');
-    function addMessage(kind, text, result) { const evidence = result?.evidence?.length ? `<div class="evidence-list">${result.evidence.map(item => `<span>${esc(item.metric)} <b>${fmt(item.value)} ${esc(item.unit || '')}</b></span>`).join('')}</div>` : ''; const node = document.createElement('div'); node.className = `message ${kind}`; node.innerHTML = `<span class="message-label">${kind === 'user' ? 'YOU' : 'CO-PILOT'} · ${dateFmt(new Date().toISOString())}</span><p>${esc(text)}</p>${evidence}`; messages.appendChild(node); messages.scrollTop = messages.scrollHeight; }
-    async function ask(question) { if (!question.trim() || send.disabled) return; addMessage('user', question); input.value = ''; send.disabled = true; send.textContent = 'Checking…'; const pending = document.createElement('div'); pending.className = 'message assistant pending'; pending.textContent = 'Reading stored telemetry…'; messages.appendChild(pending); try { const result = await api('/api/ask', {method:'POST', body:JSON.stringify({question:question.trim(), vehicle_id:vehicleId})}); pending.remove(); addMessage('assistant', result.answer, result); } catch (error) { pending.remove(); addMessage('assistant', `I could not reach the telemetry service: ${error.message}. Your previous messages are still here.`); } finally { send.disabled = false; send.textContent = 'Send ↗'; input.focus(); } }
-    $('#chatForm').addEventListener('submit', event => { event.preventDefault(); ask(input.value); }); input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#chatForm').requestSubmit(); } }); document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => ask(button.dataset.question))); $('#clearChat').addEventListener('click', () => { messages.innerHTML = '<div class="message assistant"><span class="message-label">CO-PILOT · READY</span><p>Conversation cleared. Ask me about your recorded telemetry.</p></div>'; });
+    const voiceAssistant = initVoiceAssistant(messages);
+
+    const initialSpeakBtn = messages?.querySelector('.message.assistant .message-speak-btn');
+    if (initialSpeakBtn) {
+      const initialText = messages.querySelector('.message.assistant p')?.textContent || '';
+      initialSpeakBtn.addEventListener('click', () => voiceAssistant.speakSpecific(initialText));
+    }
+
+    function addMessage(kind, text, result) {
+      const evidence = result?.evidence?.length ? `<div class="evidence-list">${result.evidence.map(item => `<span>${esc(item.metric)} <b>${fmt(item.value)} ${esc(item.unit || '')}</b></span>`).join('')}</div>` : '';
+      const speakBtn = kind === 'assistant' ? `<button class="message-speak-btn" type="button" title="Read this answer aloud" aria-label="Read this answer aloud"><span>🔊 Listen</span></button>` : '';
+      const node = document.createElement('div');
+      node.className = `message ${kind}`;
+      node.innerHTML = `<span class="message-label">${kind === 'user' ? 'YOU' : 'CO-PILOT'} · ${dateFmt(new Date().toISOString())}</span>${speakBtn}<p>${esc(text)}</p>${evidence}`;
+      if (kind === 'assistant') {
+        const btn = node.querySelector('.message-speak-btn');
+        if (btn) btn.addEventListener('click', () => voiceAssistant.speakSpecific(text));
+      }
+      messages.appendChild(node);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    async function ask(question) {
+      if (!question.trim() || send.disabled) return;
+      voiceAssistant.stop();
+      addMessage('user', question);
+      input.value = '';
+      send.disabled = true;
+      send.textContent = 'Checking…';
+      const pending = document.createElement('div');
+      pending.className = 'message assistant pending';
+      pending.textContent = 'Reading stored telemetry…';
+      messages.appendChild(pending);
+      try {
+        const result = await api('/api/ask', {method: 'POST', body: JSON.stringify({question: question.trim(), vehicle_id: vehicleId})});
+        pending.remove();
+        addMessage('assistant', result.answer, result);
+        voiceAssistant.onAnswerReceived(result.answer);
+      } catch (error) {
+        pending.remove();
+        addMessage('assistant', `I could not reach the telemetry service: ${error.message}. Your previous messages are still here.`);
+      } finally {
+        send.disabled = false;
+        send.textContent = 'Send ↗';
+        input.focus();
+      }
+    }
+
+    $('#chatForm').addEventListener('submit', event => {
+      event.preventDefault();
+      ask(input.value);
+    });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        $('#chatForm').requestSubmit();
+      }
+    });
+    document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => ask(button.dataset.question)));
+    $('#clearChat').addEventListener('click', () => {
+      voiceAssistant.stop();
+      const clearText = 'Conversation cleared. Ask me about your recorded telemetry.';
+      messages.innerHTML = `<div class="message assistant"><span class="message-label">CO-PILOT · READY</span><button class="message-speak-btn" type="button" title="Read this answer aloud" aria-label="Read this answer aloud"><span>🔊 Listen</span></button><p>${clearText}</p></div>`;
+      voiceAssistant.setLatestAnswer(clearText);
+      const btn = messages.querySelector('.message-speak-btn');
+      if (btn) btn.addEventListener('click', () => voiceAssistant.speakSpecific(clearText));
+    });
   }
   if (page === 'home') homePage(); else if (page === 'analytics') analyticsPage(); else llmPage();
   setupPointerInteractions();
