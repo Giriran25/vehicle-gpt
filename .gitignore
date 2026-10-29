@@ -6,3 +6,6 @@ __pycache__/
 vehiclegpt.db
 .neon
 node_modules/
+
+.vercel
+.env.local
