@@ -22,6 +22,7 @@ from .schemas import (
     VehicleCreate,
     VehicleOut,
 )
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,10 +102,12 @@ def upgrade_legacy_sqlite_schema() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    upgrade_legacy_sqlite_schema()
-    with SessionLocal() as db:
-        seed_demo_data(db)
+    if settings.database_url.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
+        upgrade_legacy_sqlite_schema()
+    if settings.seed_demo_data:
+        with SessionLocal() as db:
+            seed_demo_data(db)
     yield
 
 

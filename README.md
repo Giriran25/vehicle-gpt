@@ -116,3 +116,86 @@ For a hackathon demo, use PostgreSQL Compose if teammates will test simultaneous
 - Q&A is rule-based, not an LLM, and supports a limited set of question categories.
 - The 110°C temperature threshold is a simple prototype alert heuristic, not a manufacturer-specific diagnostic threshold.
 - No login, role-based access, tenant isolation, or vehicle ownership controls yet.
+
+## Vercel deployment
+
+The repository uses Vercel's current zero-configuration FastAPI detection:
+
+- `.python-version` selects Python 3.12.
+- `app/main.py` is a supported FastAPI entry point and exports the single `app` instance.
+- The existing `StaticFiles` mount serves the frontend assets and is promoted by Vercel.
+- No Node.js build step is required.
+
+The configured Neon project is `VehicleGPT` (`lingering-brook-90407182`) in the
+`RANJITH KUMAR G` organization. View it in the
+[Neon Console](https://console.neon.tech/app/projects/lingering-brook-90407182/).
+
+Import the repository with its root as the Vercel **Root Directory**. Vercel's current
+FastAPI integration supports `app/main.py` directly; no custom rewrite or duplicate
+function entry point is needed. Configure these
+environment variables separately for Preview and Production:
+
+- `DATABASE_URL`: a hosted PostgreSQL connection string from Neon or another compatible provider.
+  `postgres://` and `postgresql://` URLs are normalized to the installed Psycopg 3 driver.
+- `APP_ENV=production`.
+- `SEED_DEMO_DATA=false`, or omit it because production defaults to false.
+- Optional pool settings: `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE`.
+
+Never commit the real database URL. `.env.example` contains placeholders only.
+
+### Production migrations
+
+Apply migrations once from a trusted shell or CI job before the first production request:
+
+```powershell
+$env:DATABASE_URL = "postgresql://user:password@host.example.com/vehiclegpt?sslmode=require"
+$env:APP_ENV = "production"
+alembic upgrade head
+```
+
+Production startup does not run `create_all()` or Alembic migrations and does not insert demo
+telemetry. For an explicitly seeded non-production environment, run this after migrations:
+
+```powershell
+python -m scripts.seed_demo
+```
+
+The command is repeatable and does not duplicate the demo vehicle's records.
+
+### Preview and production deployment
+
+With the Vercel CLI installed and authenticated:
+
+```powershell
+vercel --version
+vercel link
+vercel deploy
+vercel deploy --prod
+```
+
+Verify `/`, `/analytics`, `/llm`, `/api/health`, and `/docs` on the preview before promoting
+to production. `/api/health` must report `"database": "connected"`.
+
+For `500 FUNCTION_INVOCATION_FAILED`, inspect the deployment's Functions logs in the Vercel
+dashboard or run:
+
+```powershell
+vercel logs <deployment-url>
+```
+
+Likely configuration causes are a missing database URL, missing Preview/Production variables,
+an unreachable PostgreSQL provider, or migrations not being applied. The app rejects SQLite
+when `APP_ENV=production` or Vercel reports `VERCEL_ENV=production`; it will not silently use
+an ephemeral deployment filesystem.
+
+### Deployment checks
+
+```powershell
+python -m compileall -q app migrations scripts
+pytest -q
+node --check static\app.js
+alembic upgrade head
+```
+
+The local suite uses SQLite. PostgreSQL URL/configuration compatibility is tested, but a live
+PostgreSQL provider still requires provider credentials and network access to test end-to-end.
