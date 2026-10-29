@@ -9,6 +9,7 @@ A small, polished full-stack prototype for exploring vehicle telemetry and askin
 - Ask about engine temperature, fuel-level changes, speed, and odometer distance.
 - Evidence chips accompany answers; the system says when there is insufficient data.
 - Persistent telemetry and query history in SQLAlchemy-backed storage.
+- Interactive procedural Three.js concept-car hero with telemetry callouts and a CSS fallback.
 - Seeded demo readings on first startup.
 - Input validation, API health endpoint, request error handling, and basic API tests.
 - SQLite for zero-setup local development; PostgreSQL via Docker Compose for concurrent deployments.
@@ -65,6 +66,13 @@ Tests use FastAPI's test client. The app seeds the configured database on startu
 
 The browser UI is available at `/`, `/analytics`, and `/llm`. All three pages are served
 directly by FastAPI, so direct navigation and refresh work without a separate frontend server.
+
+The homepage hero uses a pinned Three.js ES-module import to render an original, unbranded
+procedural sports-car concept. It does not download a third-party vehicle model or use a
+manufacturer's design. If WebGL or the module import is unavailable, the interface shows a
+lightweight CSS car fallback and keeps the telemetry UI usable. The scene pauses when its
+panel is off-screen or the document is hidden, caps device pixel ratio, supports pointer
+rotation, drag inspection, reset view, keyboard-accessible callouts, and reduced-motion mode.
 
 Example telemetry request:
 
