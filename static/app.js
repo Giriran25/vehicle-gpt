@@ -201,6 +201,7 @@
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(26, 1, .1, 100);
         camera.position.set(6.6, 3.2, 8.7);
+        camera.lookAt(0, .8, 0);
         const renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true, powerPreference: 'high-performance'});
         renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.75));
         renderer.outputColorSpace = THREE.SRGBColorSpace;
