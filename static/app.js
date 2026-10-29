@@ -1,0 +1,167 @@
+(() => {
+  'use strict';
+  const page = document.body.dataset.page || 'home';
+  const vehicleId = 'demo-vehicle-01';
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmt = (value, digits = 1) => value === null || value === undefined ? 'N/A' : Number(value).toFixed(digits);
+  const dateFmt = value => {
+    if (!value) return 'Time unavailable';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  };
+  async function api(path, options = {}) {
+    const response = await fetch(path, {headers: {'Content-Type':'application/json', ...(options.headers || {})}, ...options});
+    if (!response.ok) {
+      let detail = `Request failed (${response.status})`;
+      try { const body = await response.json(); detail = body.detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    return response.json();
+  }
+  function shell(content) {
+    $('#app').innerHTML = `
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="VehicleGPT home"><span class="brand-mark">V</span><span>vehicle<span class="brand-muted">gpt</span><small>VEHICLE INTELLIGENCE SYSTEM</small></span></a>
+        <button class="menu-toggle" aria-expanded="false" aria-controls="site-nav">Menu <span>☰</span></button>
+        <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+          <a class="${page === 'home' ? 'active' : ''}" href="/">Main</a>
+          <a class="${page === 'analytics' ? 'active' : ''}" href="/analytics">System analytics</a>
+          <a class="${page === 'llm' ? 'active' : ''}" href="/llm">LLM intelligence</a>
+        </nav>
+        <div class="header-status"><i></i><span id="globalStatus">Checking system</span></div>
+      </header>
+      <main class="page-shell">${content}</main>
+      <footer class="site-footer"><div><b>VEHICLE<span>GPT</span></b><small>Evidence-grounded vehicle intelligence for every mile.</small></div><nav><a href="/">Main</a><a href="/analytics">Analytics</a><a href="/llm">Assistant</a><a href="/docs">API docs</a></nav><small>Prototype · Not a diagnostic tool</small></footer>
+      <div class="robot-wrap" id="robotWrap"><button class="robot" id="robot" aria-label="Open co-pilot help"><span class="robot-antenna"></span><span class="robot-face"><i></i><i></i><b>⌣</b></span><span class="robot-body"><i></i><i></i></span><span class="robot-foot left"></span><span class="robot-foot right"></span></button><div class="robot-bubble hidden" id="robotBubble"><button class="bubble-close" aria-label="Close help">×</button><b id="robotTitle">Pit-crew co-pilot</b><span id="robotCopy"></span></div></div>
+      <div class="toast" id="toast" role="status"></div>`;
+    setupShell();
+  }
+  function setupShell() {
+    const menu = $('.menu-toggle'), nav = $('#site-nav');
+    menu?.addEventListener('click', () => { const open = nav.classList.toggle('open'); menu.setAttribute('aria-expanded', open); });
+    nav?.querySelectorAll('a').forEach(link => link.addEventListener('click', event => {
+      nav.classList.remove('open');
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target === '_blank') return;
+      const transition = document.createElement('div');
+      transition.className = 'page-transition';
+      transition.innerHTML = '<i></i><b>LOADING SYSTEM</b>';
+      document.body.appendChild(transition);
+      requestAnimationFrame(() => transition.classList.add('active'));
+    }));
+    const robot = $('#robot'), bubble = $('#robotBubble'), close = $('.bubble-close');
+    const help = {
+      home: ['Welcome aboard.', 'I can point you to the real telemetry overview or the evidence assistant.'],
+      analytics: ['Reading the signals.', 'Charts are built from stored measurements. “N/A” means the vehicle did not record that sensor.'],
+      llm: ['Evidence first.', 'Ask about temperature, fuel, speed, or distance. I will abstain rather than invent an answer.']
+    };
+    $('#robotCopy').textContent = help[page][1]; $('#robotTitle').textContent = help[page][0];
+    robot?.addEventListener('click', () => {
+      const open = bubble.classList.toggle('hidden');
+      bubble.classList.toggle('open', !open);
+      $('#robotWrap').classList.toggle('robot-paused', !open);
+    });
+    close?.addEventListener('click', () => { bubble.classList.add('hidden'); bubble.classList.remove('open'); $('#robotWrap').classList.remove('robot-paused'); });
+    let timer;
+    const showIntro = () => { bubble.classList.remove('hidden'); timer = setTimeout(() => bubble.classList.add('hidden'), 5000); };
+    setTimeout(showIntro, 900);
+    let scrollFrame = 0;
+    window.addEventListener('scroll', () => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || scrollFrame) return;
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        const progress = Math.min(1, window.scrollY / Math.max(1, document.body.scrollHeight - innerHeight));
+        const robotWrap = $('#robotWrap');
+        if (robotWrap && !bubble.classList.contains('open')) robotWrap.style.transform = `translate3d(${Math.round(progress * 28)}px, ${Math.round(progress * -34)}px, 0)`;
+        const helmet = $('.helmet-stage');
+        if (helmet) helmet.style.setProperty('--scroll-shift', `${Math.round(progress * 24)}px`);
+      });
+    }, {passive:true});
+    const hero = $('.hero');
+    if (hero && !window.matchMedia('(prefers-reduced-motion: reduce)').matches && matchMedia('(pointer:fine)').matches) {
+      let pointerFrame = 0, pointerX = 0, pointerY = 0;
+      hero.addEventListener('pointermove', event => {
+        pointerX = (event.clientX / innerWidth - .5) * 2;
+        pointerY = (event.clientY / innerHeight - .5) * 2;
+        if (pointerFrame) return;
+        pointerFrame = requestAnimationFrame(() => {
+          pointerFrame = 0;
+          hero.style.setProperty('--pointer-x', `${pointerX}`);
+          hero.style.setProperty('--pointer-y', `${pointerY}`);
+        });
+      });
+      hero.addEventListener('pointerleave', () => { hero.style.setProperty('--pointer-x', '0'); hero.style.setProperty('--pointer-y', '0'); });
+    }
+    if (page === 'home' && !sessionStorage.getItem('vehiclegpt-boot-seen') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const boot = document.createElement('div');
+      boot.className = 'boot-sequence';
+      boot.innerHTML = '<div class="boot-wordmark">VEHICLE<span>GPT</span></div><div class="boot-scan"></div><div class="boot-status">SYSTEM INITIALISING <b>100%</b></div><button class="boot-skip">Skip intro</button>';
+      document.body.appendChild(boot);
+      sessionStorage.setItem('vehiclegpt-boot-seen', '1');
+      const finish = () => { boot.classList.add('complete'); setTimeout(() => boot.remove(), 650); };
+      boot.querySelector('.boot-skip').addEventListener('click', finish);
+      setTimeout(finish, 1250);
+    }
+    api('/api/health').then(data => setStatus(data.status === 'ok' && data.database === 'connected')).catch(() => setStatus(false));
+    document.querySelectorAll('.reveal').forEach(el => new IntersectionObserver(entries => entries.forEach(e => e.isIntersecting && e.target.classList.add('visible')), {threshold:.12}).observe(el));
+  }
+  function setStatus(online) { const status = $('#globalStatus'); if (status) status.textContent = online ? 'System operational' : 'Backend unavailable'; document.querySelector('.header-status')?.classList.toggle('offline', !online); }
+  function toast(message) { const el = $('#toast'); if (!el) return; el.textContent = message; el.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove('show'), 3500); }
+  function metric(label, value, unit, tone = 'cyan', note = 'Stored telemetry') { return `<article class="metric-card ${tone}"><div class="metric-label">${label}<span>◈</span></div><strong data-value="${esc(value)}">${esc(value)}</strong><small>${unit}</small><p>${note}</p></article>`; }
+  function animateNumber(element, value, digits = 1) {
+    if (!element || value === null || value === undefined || !Number.isFinite(Number(value))) { if (element) element.textContent = 'N/A'; return; }
+    const target = Number(value), start = Number(element.dataset.current || 0), duration = 650, began = performance.now();
+    const tick = now => {
+      const progress = Math.min(1, (now - began) / duration), eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = (start + (target - start) * eased).toFixed(digits);
+      if (progress < 1) requestAnimationFrame(tick); else element.dataset.current = target;
+    };
+    requestAnimationFrame(tick);
+  }
+  function homePage() {
+    shell(`<section class="hero reveal"><div class="eyebrow">VEHICLE INTELLIGENCE / 01</div><h1>Understand<br><em>every mile.</em></h1><p class="hero-copy">Your vehicle's history, translated into intelligence. Explore telemetry patterns and ask grounded questions without the guesswork.</p><div class="hero-actions"><a class="button primary" href="/analytics">Explore analytics <span>↗</span></a><a class="button ghost" href="/llm">Ask VehicleGPT <span>✦</span></a></div><div class="hero-console helmet-stage" aria-label="Decorative VehicleGPT performance helmet"><div class="console-top"><span>DEMO-VEHICLE-01</span><span class="live-dot">● SIMULATED DATA</span></div><div class="helmet-hud hud-one">AI / 07</div><div class="helmet-hud hud-two">VISOR LINK <b>OK</b></div><svg class="helmet-svg" viewBox="0 0 500 430" role="img" aria-label="Futuristic VehicleGPT racing helmet"><defs><linearGradient id="shellGradient" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#263b54"/><stop offset=".46" stop-color="#111925"/><stop offset="1" stop-color="#05080d"/></linearGradient><linearGradient id="visorGradient" x1="0" x2="1"><stop stop-color="#142d41"/><stop offset=".5" stop-color="#35d7ff"/><stop offset="1" stop-color="#08111c"/></linearGradient><filter id="helmetGlow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g class="helmet-backdrop"><circle cx="250" cy="210" r="180"/><circle cx="250" cy="210" r="150"/><path d="M75 310H425M100 350H400"/></g><g class="helmet-shell"><path d="M128 322C93 265 90 166 130 102C164 48 215 26 276 31C367 38 414 105 409 203L392 319L335 364H177Z" fill="url(#shellGradient)" stroke="#35d7ff" stroke-width="2"/><path d="M138 267C127 208 140 119 191 79C218 59 258 49 296 55C359 65 389 116 385 181L369 237L327 263L170 270Z" fill="#0b1421" stroke="#1b6c82" stroke-width="2"/></g><path class="helmet-side-panel" d="M125 177L162 159L174 291L140 322Z" fill="#182333" stroke="#35d7ff"/><path class="helmet-visor" d="M164 151C218 126 316 126 374 160L354 230C304 249 221 248 169 225Z" fill="url(#visorGradient)" stroke="#c5ff54" stroke-width="3"/><path class="visor-reflection" d="M188 160C242 143 295 143 351 160L318 178C270 166 232 168 198 180Z" fill="#eaffff"/><g class="helmet-detail" stroke="#c5ff54" fill="none"><path d="M202 284H315"/><path d="M215 302H301"/><path d="M330 273L365 253M337 284L372 264"/><path d="M185 102L205 75M200 105L220 76"/></g><g class="helmet-markings" fill="#35d7ff"><circle cx="150" cy="144" r="4"/><circle cx="369" cy="143" r="4"/><circle cx="175" cy="335" r="3"/><circle cx="343" cy="334" r="3"/></g><path class="helmet-scan" d="M145 203H380" filter="url(#helmetGlow)"/></svg><div class="helmet-caption"><span class="eyebrow">SIGNATURE INTERFACE / 01</span><b><span id="heroTemp">—</span>°C · Performance telemetry, made legible.</b><small id="heroTime">Waiting for the latest record</small></div></div></section>
+    <section class="section reveal"><div class="section-heading"><div><div class="eyebrow">LIVE VEHICLE OVERVIEW</div><h2>Signals, not assumptions.</h2></div><a class="text-link" href="/analytics">Open system analytics ↗</a></div><div class="metric-grid" id="homeMetrics">${metric('Latest temperature','—','°C','amber','Latest recorded reading')}${metric('Fuel level','—','%','lime','Latest recorded reading')}${metric('Max speed','—','km/h','cyan','Stored sample maximum')}${metric('Distance span','—','km','purple','Odometer difference')}</div></section>
+    <section class="section capabilities reveal"><div class="section-heading"><div><div class="eyebrow">WHAT THE SYSTEM DOES</div><h2>A smarter cockpit for your data.</h2></div></div><div class="capability-grid"><a href="/analytics" class="capability"><span>01</span><b>Vehicle intelligence</b><p>Understand historical measurements and recorded events.</p><strong>Explore signals ↗</strong></a><a href="/analytics" class="capability"><span>02</span><b>System analytics</b><p>Inspect trends, calculated metrics, and data quality.</p><strong>Inspect telemetry ↗</strong></a><a href="/llm" class="capability"><span>03</span><b>Evidence assistant</b><p>Ask natural-language questions and see the evidence behind every answer.</p><strong>Ask a question ↗</strong></a></div></section>
+    <section class="section process reveal"><div class="section-heading"><div><div class="eyebrow">HOW IT WORKS</div><h2>From signal to story.</h2></div></div><div class="process-grid">${[['01','Ingest','Vehicle telemetry enters the system.'],['02','Analyse','The backend retrieves records and calculates metrics.'],['03','Understand','Questions are checked against available evidence.'],['04','Explain','The interface presents an answer with its support.']].map(x => `<article><span>${x[0]}</span><b>${x[1]}</b><p>${x[2]}</p></article>`).join('')}</div></section>
+    <section class="closing reveal"><div class="eyebrow">READY WHEN YOU ARE</div><h2>Every signal<br><em>tells a story.</em></h2><div class="hero-actions"><a class="button primary" href="/analytics">Read the system ↗</a><a class="button ghost" href="/llm">Talk to the co-pilot ✦</a></div></section>`);
+    api(`/api/summary?vehicle_id=${vehicleId}`).then(data => {
+      const latest = data.latest || {}, metrics = data.metrics || {};
+      animateNumber($('#heroTemp'), latest.engine_temp_c, 0); $('#heroTime').textContent = latest.recorded_at ? `Last recorded ${dateFmt(latest.recorded_at)}` : 'No records available';
+      $('#homeMetrics').innerHTML = metric('Latest temperature', fmt(latest.engine_temp_c), '°C', 'amber', 'Latest recorded reading') + metric('Fuel level', fmt(latest.fuel_level_pct, 0), '%', 'lime', 'Latest recorded reading') + metric('Max speed', fmt(metrics.max_speed_kph, 0), 'km/h', 'cyan', 'Stored sample maximum') + metric('Distance span', fmt(metrics.distance_span_km, 0), 'km', 'purple', 'Odometer difference');
+      const values = [latest.engine_temp_c, latest.fuel_level_pct, metrics.max_speed_kph, metrics.distance_span_km];
+      document.querySelectorAll('#homeMetrics [data-value]').forEach((element, index) => animateNumber(element, values[index], index === 1 || index === 2 || index === 3 ? 0 : 1));
+    }).catch(() => { toast('Telemetry is unavailable. The dashboard will recover when the backend returns.'); });
+  }
+  function analyticsPage() {
+    shell(`<section class="page-intro reveal"><div><div class="eyebrow">SYSTEM ANALYTICS / 02</div><h1>Inspect the <em>signals.</em></h1><p>Understand the machine through actual recorded telemetry. Calculated values are labelled; unavailable measurements stay unavailable.</p></div><div class="data-badge"><i></i><span id="analyticsStatus">Checking backend</span><small id="updatedAt">—</small></div></section>
+    <section class="filter-bar reveal"><label>Vehicle<select id="vehicleFilter"><option value="${vehicleId}">Demo Vehicle 01</option></select></label><label>Start<input id="startFilter" type="datetime-local"></label><label>End<input id="endFilter" type="datetime-local"></label><button class="button primary" id="applyFilters">Refresh data ↻</button><button class="button ghost" id="resetFilters">Reset</button></section>
+    <section class="metric-grid analytics-metrics reveal" id="analyticsMetrics">${metric('Total records','—','events','cyan','Measured count')}${metric('Latest temperature','—','°C','amber','Latest measured')}${metric('Maximum speed','—','km/h','purple','Measured maximum')}${metric('Average speed','—','km/h','cyan','Measured average')}${metric('Latest fuel','—','%','lime','Latest measured')}${metric('Distance span','—','km','lime','Calculated from odometer')}</section>
+    <section class="chart-grid reveal"><article class="panel chart-panel"><div class="panel-heading"><div><div class="eyebrow">TEMPERATURE</div><h2>Engine temperature</h2></div><span class="unit">°C</span></div><div id="tempChart" class="chart"></div></article><article class="panel chart-panel"><div class="panel-heading"><div><div class="eyebrow">SPEED</div><h2>Recorded speed</h2></div><span class="unit">KM/H</span></div><div id="speedChart" class="chart"></div></article></section>
+    <section class="panel data-panel reveal"><div class="panel-heading"><div><div class="eyebrow">SOURCE DATA</div><h2>Telemetry records</h2></div><div class="table-actions"><button class="text-link" id="prevPage">← Previous</button><span id="pageLabel">Page 1</span><button class="text-link" id="nextPage">Next →</button></div></div><div class="table-scroll"><table><thead><tr><th>TIME</th><th>EVENT</th><th>SPEED</th><th>TEMP</th><th>FUEL</th><th>ODOMETER</th><th>SOURCE</th></tr></thead><tbody id="analyticsTable"><tr><td colspan="7">Loading telemetry…</td></tr></tbody></table></div></section>
+    <section class="insight-grid reveal"><article class="panel"><div class="eyebrow">DATA QUALITY</div><h2>Read the caveats.</h2><p id="insightText">Insights will be calculated from the selected records.</p></article><article class="panel"><div class="eyebrow">MEASUREMENT KEY</div><div class="key-list"><span><i class="key-dot measured"></i>Measured value</span><span><i class="key-dot calculated"></i>Calculated value</span><span><i class="key-dot missing"></i>N/A means not recorded</span></div></article></section>`);
+    let currentPage = 1, allRows = [];
+    async function load() {
+      const vehicle = $('#vehicleFilter').value, start = $('#startFilter').value, end = $('#endFilter').value;
+      if (start && end && new Date(start) > new Date(end)) { toast('Start must be before end.'); return; }
+      const query = new URLSearchParams({vehicle_id: vehicle, page: String(currentPage), page_size: '10'}); if (start) query.set('start', new Date(start).toISOString()); if (end) query.set('end', new Date(end).toISOString());
+      try {
+        const [summary, rows, health] = await Promise.all([api(`/api/telemetry/summary?${query}`), api(`/api/telemetry?${query}`), api('/api/health')]);
+        setStatus(health.status === 'ok' && health.database === 'connected'); $('#analyticsStatus').textContent = 'Backend connected'; $('#updatedAt').textContent = `Updated ${dateFmt(summary.latest_recorded_at)}`;
+        const cards = [['Total records',summary.total_records,'events','cyan','Measured count'],['Latest temperature',fmt(summary.latest_temperature_c),'°C','amber','Latest measured'],['Maximum speed',fmt(summary.max_speed_kph),'km/h','purple','Measured maximum'],['Average speed',fmt(summary.average_speed_kph),'km/h','cyan','Measured average'],['Latest fuel',fmt(summary.latest_fuel_level_pct,0),'%','lime','Latest measured'],['Distance span',fmt(summary.distance_travelled_km),'km','lime','Calculated from odometer']];
+        $('#analyticsMetrics').innerHTML = cards.map(x => metric(...x)).join(''); allRows = rows; renderRows(rows); drawChart('tempChart', rows, 'engine_temp_c', '°C', '#35d7ff'); drawChart('speedChart', rows, 'speed_kph', 'km/h', '#c5ff54');
+        const missing = rows.filter(row => row.engine_temp_c == null).length; $('#insightText').textContent = rows.length ? `${missing} of ${rows.length} displayed records have no engine-temperature reading. Distance is an odometer difference, not a trip reconstruction.` : 'No telemetry matches these filters.';
+      } catch (error) { toast(`Analytics unavailable: ${error.message}`); $('#analyticsTable').innerHTML = '<tr><td colspan="7">Unable to load records. Check the backend.</td></tr>'; }
+    }
+    function renderRows(rows) { $('#analyticsTable').innerHTML = rows.length ? rows.map(row => `<tr><td>${dateFmt(row.recorded_at)}</td><td><b>${esc(row.event_type)}</b></td><td>${fmt(row.speed_kph)} km/h</td><td>${fmt(row.engine_temp_c)} °C</td><td>${fmt(row.fuel_level_pct,0)}%</td><td>${fmt(row.odometer_km)} km</td><td><span class="source-tag">${esc(row.source || 'api')}</span></td></tr>`).join('') : '<tr><td colspan="7">No telemetry matches these filters.</td></tr>'; $('#pageLabel').textContent = `Page ${currentPage}`; }
+    function drawChart(id, rows, field, unit, color) { const el = $(`#${id}`), values = rows.map(r => r[field]).filter(v => v != null); if (values.length < 2) { el.innerHTML = '<div class="empty-state">Not enough recorded values to draw this chart.</div>'; return; } const min = Math.min(...values), max = Math.max(...values), range = max - min || 1, points = values.map((v,i) => `${(i/(values.length-1))*100},${94-((v-min)/range)*76}`).join(' '); el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${field} chart"><polyline class="chart-line" points="${points}" fill="none" stroke="${color}" stroke-width="1.4" vector-effect="non-scaling-stroke"/><polygon class="chart-area" points="${points} 100,100 0,100" fill="${color}" opacity=".08"/></svg><div class="chart-labels"><span>${fmt(min)} ${unit}</span><span>${fmt(max)} ${unit}</span></div>`; }
+    $('#applyFilters').addEventListener('click', () => { currentPage = 1; load(); }); $('#resetFilters').addEventListener('click', () => { $('#startFilter').value = ''; $('#endFilter').value = ''; currentPage = 1; load(); }); $('#prevPage').addEventListener('click', () => { if (currentPage > 1) { currentPage--; load(); } }); $('#nextPage').addEventListener('click', () => { if (allRows.length === 10) { currentPage++; load(); } }); load();
+  }
+  function llmPage() {
+    shell(`<section class="page-intro assistant-intro reveal"><div><div class="eyebrow">VEHICLEGPT INTELLIGENCE / 03</div><h1>Ask your <em>vehicle.</em></h1><p>Explore recorded history through evidence-grounded questions. The current answering mode is deterministic and rule-based — no model is being presented as active.</p></div><div class="mode-badge"><span>●</span><b>Evidence mode</b><small>Rule-based prototype</small></div></section><section class="assistant-layout reveal"><article class="panel chat-panel"><div class="chat-head"><div class="robot-mini">✦</div><div><b>VehicleGPT co-pilot</b><small>Grounded in demo-vehicle-01 telemetry</small></div><button id="clearChat" class="text-link">Clear</button></div><div id="chatMessages" class="chat-messages"><div class="message assistant"><span class="message-label">CO-PILOT · READY</span><p>Ask me about engine temperature, fuel changes, speed, or distance. I will show the evidence I used and say when the records are insufficient.</p></div></div><div class="suggestion-row"><button data-question="Has my engine temperature been unusually high?">Temperature history</button><button data-question="How has my fuel level changed?">Fuel changes</button><button data-question="What is my maximum recorded speed?">Maximum speed</button></div><form id="chatForm" class="chat-form"><label class="sr-only" for="chatInput">Ask VehicleGPT</label><textarea id="chatInput" rows="1" maxlength="500" placeholder="Ask about your recorded telemetry…" required></textarea><button id="sendButton" class="button primary" type="submit">Send ↗</button></form></article><aside class="panel evidence-guide"><div class="eyebrow">HOW TO ASK</div><h2>Good questions get grounded answers.</h2><div class="guide-item"><span>01</span><p>Choose a supported topic: temperature, fuel, speed, or odometer distance.</p></div><div class="guide-item"><span>02</span><p>Every response can include measurements from the stored telemetry.</p></div><div class="guide-item"><span>03</span><p>No evidence means no guess. The assistant will abstain honestly.</p></div><a class="text-link" href="/analytics">Inspect the source data ↗</a></aside></section>`);
+    const messages = $('#chatMessages'), input = $('#chatInput'), send = $('#sendButton');
+    function addMessage(kind, text, result) { const evidence = result?.evidence?.length ? `<div class="evidence-list">${result.evidence.map(item => `<span>${esc(item.metric)} <b>${fmt(item.value)} ${esc(item.unit || '')}</b></span>`).join('')}</div>` : ''; const node = document.createElement('div'); node.className = `message ${kind}`; node.innerHTML = `<span class="message-label">${kind === 'user' ? 'YOU' : 'CO-PILOT'} · ${dateFmt(new Date().toISOString())}</span><p>${esc(text)}</p>${evidence}`; messages.appendChild(node); messages.scrollTop = messages.scrollHeight; }
+    async function ask(question) { if (!question.trim() || send.disabled) return; addMessage('user', question); input.value = ''; send.disabled = true; send.textContent = 'Checking…'; const pending = document.createElement('div'); pending.className = 'message assistant pending'; pending.textContent = 'Reading stored telemetry…'; messages.appendChild(pending); try { const result = await api('/api/ask', {method:'POST', body:JSON.stringify({question:question.trim(), vehicle_id:vehicleId})}); pending.remove(); addMessage('assistant', result.answer, result); } catch (error) { pending.remove(); addMessage('assistant', `I could not reach the telemetry service: ${error.message}. Your previous messages are still here.`); } finally { send.disabled = false; send.textContent = 'Send ↗'; input.focus(); } }
+    $('#chatForm').addEventListener('submit', event => { event.preventDefault(); ask(input.value); }); input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#chatForm').requestSubmit(); } }); document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => ask(button.dataset.question))); $('#clearChat').addEventListener('click', () => { messages.innerHTML = '<div class="message assistant"><span class="message-label">CO-PILOT · READY</span><p>Conversation cleared. Ask me about your recorded telemetry.</p></div>'; });
+  }
+  if (page === 'home') homePage(); else if (page === 'analytics') analyticsPage(); else llmPage();
+})();
